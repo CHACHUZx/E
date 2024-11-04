@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html>
+
+
+
+
+<title>Marco</title>
+
+<canvas id='gl-canvas'></canvas>
+<canvas id='ui-canvas'></canvas>
+<canvas id='board-canvas' width='800' height='1500'></canvas>
+
+<link rel="stylesheet" href="styles.css">
+
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+
+<script src='https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js'></script>
+
+<script src='https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js'></script>
+
+<script id='static_geometry_vsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform mat4 viewMatrix;
+    uniform vec3 lightPos;
+    
+    in vec3 vertPos;
+    in vec3 vertColor;
+    in vec2 vertTexCoord;
+    in vec3 vertNormal;
+    
+    out vec3 pixPos;
+    out vec3 pixColor;
+    out vec2 pixTexCoord;
+    out vec3 pixNormal;
+    
+    void main(){
+        
+        vec3 diffuse_vertColor=vertColor*max((dot(normalize(lightPos-vertPos),vertNormal)*0.5+0.5)*0.5,0.2)*3.0;
+        
+        pixPos=vertPos.xyz;
+        pixColor=diffuse_vertColor;
+        pixTexCoord=vertTexCoord;
+        pixNormal=vertNormal;
+        
+        gl_Position=viewMatrix*vec4(vertPos,1);
+    }
+    
+</script>
+
+<script id='static_geometry_fsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform sampler2D tex;
+    uniform vec3 lightPos;
+    uniform vec3 playerPos;
+    uniform float alpha;
+    
+    in vec3 pixPos;
+    in vec3 pixColor;
+    in vec2 pixTexCoord;
+    in vec3 pixNormal;
+    
+    layout(location=0) out vec4 fragColor;
+    layout(location=1) out vec4 fragInfo;
+    layout(location=2) out vec4 fragNormal;
+    
+    void main(){
+        
+        vec3 normal=normalize(pixNormal);
+        vec3 toCam=normalize(playerPos-pixPos);
+        vec3 toLight=normalize(lightPos-pixPos);
+        vec3 halfVec=normalize(toCam+toLight);
+        
+        float specular=0.0;
+        
+        if(dot(normal,toLight)>-0.5){
+            
+            specular=dot(halfVec,normal);
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+        }
+        
+        float refl=max(0.4-dot(toCam,normal),0.0);
+        
+        fragColor=vec4(pixColor+texture(tex,pixTexCoord).rgb,alpha);
+        fragInfo=vec4(0,specular*0.5+refl,(gl_FragCoord.z/gl_FragCoord.w)*0.01,1);
+        fragNormal=vec4(normal*0.5+0.5,1.0);
+    }
+    
+</script>
+
+<script id='dynamic_geometry_vsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform mat4 viewMatrix;
+    uniform vec3 lightPos;
+    uniform mat4 modelMatrix;
+    
+    in vec3 vertPos;
+    in vec3 vertColor;
+    in vec3 vertNormal;
+    
+    out vec3 pixPos;
+    out vec3 pixColor;
+    out vec3 pixNormal;
+    
+    void main(){
+        
+        vec4 transformedPosition=modelMatrix*vec4(vertPos,1);
+        
+        vec3 transformedNormal=normalize(mat3(modelMatrix)*vertNormal);
+        
+        vec3 diffuse_vertColor=vertColor*max((dot(normalize(lightPos-transformedPosition.xyz),transformedNormal)*0.5+0.5)*0.5,0.2)*3.0;
+        
+        pixPos=transformedPosition.xyz;
+        pixColor=diffuse_vertColor;
+        pixNormal=transformedNormal;
+        
+        gl_Position=viewMatrix*transformedPosition;
+    }
+    
+</script>
+
+<script id='dynamic_geometry_fsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform vec3 lightPos;
+    uniform vec3 playerPos;
+    
+    in vec3 pixPos;
+    in vec3 pixColor;
+    in vec3 pixNormal;
+    
+    layout(location=0) out vec4 fragColor;
+    layout(location=1) out vec4 fragInfo;
+    layout(location=2) out vec4 fragNormal;
+    
+    void main(){
+        
+        vec3 normal=normalize(pixNormal);
+        vec3 toCam=normalize(playerPos-pixPos);
+        vec3 toLight=normalize(lightPos-pixPos);
+        vec3 halfVec=normalize(toCam+toLight);
+        
+        float specular=0.0;
+        
+        if(dot(normal,toLight)>-0.5){
+            
+            specular=dot(halfVec,normal);
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+        }
+        
+        fragColor=vec4(pixColor,1);
+        fragInfo=vec4(0,specular*0.5,(gl_FragCoord.z/gl_FragCoord.w)*0.01,1);
+        fragNormal=vec4(normal*0.5+0.5,1.0);
+    }
+    
+</script>
+
+<script id='line_renderer_vsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform mat4 viewMatrix;
+    uniform mat4 modelMatrix;
+    uniform vec2 thickness;
+    
+    in vec3 vertPos;
+    
+    out float lineT;
+    
+    void main(){
+        
+        lineT=vertPos.z+0.5;
+        vec3 pos=vertPos;
+        
+        if(pos.z<0.0){
+            
+            pos.x*=thickness.x;
+            pos.y*=thickness.x;
+            
+        } else {
+            
+            pos.x*=thickness.y;
+            pos.y*=thickness.y;
+        }
+        
+        gl_Position=viewMatrix*modelMatrix*vec4(pos,1);
+    }
+    
+</script>
+
+<script id='line_renderer_fsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform vec4 lineColor1;
+    uniform vec4 lineColor2;
+    
+    in float lineT;
+    
+    layout(location=0) out vec4 fragColor;
+    layout(location=1) out vec4 fragInfo;
+    layout(location=2) out vec4 fragNormal;
+    
+    void main(){
+        
+        fragColor=mix(lineColor1,lineColor2,lineT);
+        fragInfo=vec4(0,0,(gl_FragCoord.z/gl_FragCoord.w)*0.01,1);
+        fragNormal=vec4(0,0,0,0);
+    }
+    
+</script>
+
+<script id='weapon_renderer_vsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform mat4 viewMatrix;
+    uniform vec3 lightPos;
+    uniform mat4 modelMatrix;
+    uniform vec3 offset;
+    uniform float reloadAngle;
+    
+    in vec3 vertPos;
+    in vec3 vertColor;
+    in vec3 vertNormal;
+    
+    out vec3 pixPos;
+    out vec3 pixColor;
+    out vec3 pixNormal;
+    
+    void main(){
+        
+        vec3 rotatedVertPos=vertPos;
+        float sinTheta=sin(reloadAngle);
+        float cosTheta=cos(reloadAngle);
+        
+        rotatedVertPos=vec3(rotatedVertPos.x,
+        
+        rotatedVertPos.y*cosTheta-rotatedVertPos.z*sinTheta,
+        rotatedVertPos.y*sinTheta+rotatedVertPos.z*cosTheta);
+        
+        vec4 transformedPosition=modelMatrix*vec4(rotatedVertPos+offset,1);
+        
+        vec3 transformedNormal=normalize(mat3(modelMatrix)*vertNormal);
+        
+        vec3 diffuse_vertColor=vertColor*max((dot(normalize(lightPos-transformedPosition.xyz),transformedNormal)*0.5+0.5)*0.5,0.2)*3.0;
+        
+        pixPos=transformedPosition.xyz;
+        pixColor=diffuse_vertColor;
+        pixNormal=transformedNormal;
+        
+        gl_Position=viewMatrix*transformedPosition;
+    }
+    
+</script>
+
+<script id='weapon_renderer_fsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform vec3 lightPos;
+    uniform vec3 playerPos;
+    
+    in vec3 pixPos;
+    in vec3 pixColor;
+    in vec3 pixNormal;
+    
+    layout(location=0) out vec4 fragColor;
+    layout(location=1) out vec4 fragInfo;
+    layout(location=2) out vec4 fragNormal;
+    
+    void main(){
+        
+        vec3 normal=normalize(pixNormal);
+        vec3 toCam=normalize(playerPos-pixPos);
+        vec3 toLight=normalize(lightPos-pixPos);
+        vec3 halfVec=normalize(toCam+toLight);
+        
+        float specular=0.0;
+        
+        if(dot(normal,toLight)>-0.5){
+            
+            specular=dot(halfVec,normal);
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+            specular*=specular;
+        }
+        
+        fragColor=vec4(pixColor,1);
+        fragInfo=vec4(0,specular*0.5,(gl_FragCoord.z/gl_FragCoord.w)*0.01,1);
+        fragNormal=vec4(normal*0.5+0.5,1.0);
+    }
+    
+</script>
+
+<script id='board_geometry_vsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform mat4 viewMatrix;
+    
+    in vec3 vertPos;
+    in vec2 vertTexCoord;
+    
+    out vec2 pixTexCoord;
+    
+    void main(){
+        
+        pixTexCoord=vertTexCoord;
+        
+        gl_Position=viewMatrix*vec4(vertPos,1);
+    }
+    
+</script>
+
+<script id='board_geometry_fsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform sampler2D tex;
+    
+    in vec2 pixTexCoord;
+    
+    layout(location=0) out vec4 fragColor;
+    layout(location=1) out vec4 fragInfo;
+    layout(location=2) out vec4 fragNormal;
+    
+    void main(){
+        
+        vec4 col=texture(tex,pixTexCoord);
+        
+        if(col.a<=0.0){
+            
+            discard;
+        }
+        
+        fragColor=vec4(col);
+        fragInfo=vec4(0,0,(gl_FragCoord.z/gl_FragCoord.w)*0.01,1);
+        fragNormal=vec4(0,0,0,0);
+    }
+    
+</script>
+
+<script id='particle_renderer_vsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform mat4 viewMatrix;
+    
+    in vec3 vertPos;
+    in vec3 vertColor;
+    in float vertSize;
+    in float vertRot;
+    
+    out float particleSize;
+    out vec2 particlePos;
+    out vec3 pixColor;
+    out vec2 particleRot;
+    
+    void main(){
+        
+        vec4 pos=viewMatrix*vec4(vertPos,1);
+        pixColor=vertColor;
+        particlePos=pos.xy/pos.w;
+        gl_Position=pos;
+        float projSize=(vertSize/pos.z)*1.5;
+        gl_PointSize=projSize;
+        particleSize=projSize*0.5;
+        particleRot=vec2(sin(vertRot),cos(vertRot));
+        
+    }
+    
+</script>
+
+<script id='particle_renderer_fsh' type='GLSL3D'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    in float particleSize;
+    in vec2 particlePos;
+    in vec3 pixColor;
+    in vec2 particleRot;
+    
+    layout(location=0) out vec4 fragColor;
+    layout(location=1) out vec4 fragInfo;
+    layout(location=2) out vec4 fragNormal;
+    
+    void main(){
+        
+        vec2 ssPos=(gl_FragCoord.xy-vec2(HALF_WIDTH,HALF_HEIGHT))*vec2(INV_HALF_WIDTH,INV_HALF_HEIGHT);
+        vec2 del=particlePos-ssPos;
+        
+        del=vec2(
+            
+            del.x*particleRot.x-del.y*particleRot.y,
+            del.x*particleRot.y+del.y*particleRot.x
+            
+        );
+        
+        if(abs(del.x)+abs(del.y)>particleSize*INV_AVG_HALF_WIDTH_HEIGHT){
+            
+            discard;
+        }
+        
+        fragColor=vec4(pixColor,1);
+        fragInfo=vec4(0,0,(gl_FragCoord.z/gl_FragCoord.w)*0.01,1);
+        fragNormal=vec4(0,0,0,0);
+    }
+    
+</script>
+
+<script id='postprocessing_vsh' type='GLSLPostprocessing'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    in vec2 screenVerts;
+    
+    out vec2 pixTexCoord;
+    
+    void main(){
+        
+        pixTexCoord=screenVerts*0.5+0.5;
+        gl_Position=vec4(screenVerts,0,1.0);
+    }
+    
+</script>
+
+<script id='sky_renderer_vsh' type='GLSLPostprocessing'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    uniform vec2 screenTranslation;
+    
+    in vec2 vertPos;
+    in float vertIsSun;
+    
+    out float isSun;
+    
+    void main(){
+        
+        isSun=vertIsSun;
+        gl_Position=vec4(vertPos+screenTranslation,1,1);
+    }
+    
+</script>
+
+<script id='sky_renderer_fsh' type='GLSLPostprocessing'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    in float isSun;
+    
+    layout(location=0) out vec4 fragColor;
+    layout(location=1) out vec4 fragInfo;
+    layout(location=2) out vec4 fragNormal;
+    
+    void main(){
+        
+        fragColor=vec4(0,0,0,0);
+        fragInfo=vec4(isSun,0,0,1);
+        fragNormal=vec4(0,0,0,0);
+    }
+    
+</script>
+
+<script id='sunray_fsh' type='GLSLPostprocessing'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    in vec2 pixTexCoord;
+    
+    uniform sampler2D inputTex;
+    uniform vec2 sunPos;
+    
+    out vec4 fragLuminace;
+    
+    vec3 sunrays(float density,float weight,float decay,float exposure,int numSamples,sampler2D occlusionTexture,vec2 screenSpaceLightPos,vec2 uv){
+        
+        vec3 fragColor=vec3(0.0,0.0,0.0);
+        
+        vec2 deltaTextCoord=vec2(uv-screenSpaceLightPos.xy);
+      
+        vec2 textCoo=uv.xy;
+        deltaTextCoord*=(1.0/float(numSamples))*density;
+        float illuminationDecay = 1.0;
+        
+        for(int i=0;i<numSamples;i++){
+            
+            textCoo-=deltaTextCoord;
+        	vec3 samp=texture(occlusionTexture,textCoo).xxx;
+            samp*=illuminationDecay*weight;
+            fragColor+=samp;
+            illuminationDecay*=decay;
+        }
+        
+        fragColor*=exposure;
+        
+        return fragColor;
+    }
+    
+    void main(){
+        
+        vec3 col=sunrays(1.0,0.02,1.0,1.0,50,inputTex,sunPos*0.5+0.5,pixTexCoord);
+        
+        fragLuminace=vec4(col,1);
+    }
+    
+</script>
+
+
+
+<script id='ssao_fsh' type='GLSLPostprocessing'>
+
+    #version 300 es
+    
+    precision lowp float;
+    
+    in vec2 pixTexCoord;
+    
+    uniform sampler2D normalTex;
+    
+    out vec4 fragOcclusion;
+    
+    void main(){
+        
+        float am=0.0;
+        
+        vec4 sampledNormal=texture(normalTex,pixTexCoord);
+        
+        if(sampledNormal.a>0.01){
+            
+            vec3 pixNormal=sampledNormal.xyz*2.0-1.0;
+            
+            for(int x=-7;x<=7;x+=2){
+                
+                for(int y=-7;y<=7;y+=2){
+                    
+                    vec2 sam=vec2(x,y)*0.003;
+                    vec4 sampleNormal=texture(normalTex,pixTexCoord+sam);
+                    if(sampleNormal.a>0.01){
+                        
+                        am+=1.0-(dot(pixNormal,sampleNormal.xyz*2.0-1.0));
+                    }
+                }
+            }
+            
+            am*=0.009;
+            am-=0.05;
+        
+        } else {
+            
+            am=0.0;
+        }
+        
+        fragOcclusion=vec4(am,am,am,1);
+        
+    }
+    
+</script>
+
+<script id='fxaa_fsh' type='GLSLPostprocessing'>
+    
+    #version 300 es
+    
+    precision lowp float;
+    
+    in vec2 pixTexCoord;
+    
+    uniform sampler2D tex;
+    
+    out vec4 fragColor;
+    
+    #define FXAA_SPAN_MAX 3.0
+    #define FXAA_REDUCE_MUL 0.5
+    #define FXAA_REDUCE_MIN 0.4
+    #define FXAA_SUBPIX_SHIFT 0.5
+    
+    vec3 fxaaPixelShader(vec4 uv,sampler2D tex,vec2 rcpFrame){
+        
+        vec3 rgbNW=texture(tex,uv.zw).xyz;
+        vec3 rgbNE=texture(tex,uv.zw+vec2(1,0)*rcpFrame.xy).xyz;
+        vec3 rgbSW=texture(tex,uv.zw+vec2(0,1)*rcpFrame.xy).xyz;
+        vec3 rgbSE=texture(tex,uv.zw+vec2(1,1)*rcpFrame.xy).xyz;
+        vec3 rgbM=texture(tex,uv.xy).xyz;
+    
+        vec3 luma=vec3(0.299,0.587,0.114);
+        float lumaNW=dot(rgbNW,luma);
+        float lumaNE=dot(rgbNE,luma);
+        float lumaSW=dot(rgbSW,luma);
+        float lumaSE=dot(rgbSE,luma);
+        float lumaM=dot(rgbM,luma);
+    
+        float lumaMin=min(lumaM,min(min(lumaNW,lumaNE),min(lumaSW,lumaSE)))*0.75;
+        float lumaMax=max(lumaM,max(max(lumaNW,lumaNE),max(lumaSW,lumaSE)))*1.25;
+        
+        vec2 dir=vec2((lumaSW+lumaSE)-(lumaNW+lumaNE),(lumaNW+lumaSW)-(lumaNE+lumaSE));
+        
+        float dirReduce=max((lumaNW+lumaNE+lumaSW+lumaSE)*FXAA_REDUCE_MUL,FXAA_REDUCE_MIN);
+        float rcpDirMin=1.5/(min(abs(dir.x),abs(dir.y))+dirReduce);
+        dir=min(vec2(FXAA_SPAN_MAX,FXAA_SPAN_MAX),max(vec2(-FXAA_SPAN_MAX,-FXAA_SPAN_MAX),dir*rcpDirMin))*rcpFrame.xy*0.5;
+    
+        vec3 rgbA=0.5*(texture(tex,uv.xy+dir*-0.16666667).xyz +texture(tex,uv.xy+dir*-0.16666667).xyz);
+        vec3 rgbB=rgbA*0.5+0.25*(texture(tex,uv.xy-dir).xyz+texture(tex,uv.xy+dir).xyz);
+        
+        float lumaB=dot(rgbB,luma);
+    
+        if(lumaB<lumaMin || lumaB>lumaMax) return rgbA;
+        
+        return rgbB; 
+    }
+    
+    void main(){
+        
+        vec2 rcpFrame=vec2(INV_HALF_WIDTH,INV_HALF_HEIGHT)*2.0;
+      	vec2 uv2=pixTexCoord;
+        
+	   	vec4 uv=vec4(uv2,uv2-(rcpFrame*FXAA_SUBPIX_SHIFT));
+	    vec3 col=fxaaPixelShader(uv,tex,rcpFrame);
+        
+        fragColor=vec4(col,1);
+    }
+    
+</script>
+
+
+
+<div class="page">
+
+</div>
+
+
+
+<script type='application/javascript' src="main.js"></script>
+
+
+</html>
